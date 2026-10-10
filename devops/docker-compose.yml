@@ -1,0 +1,41 @@
+name: chinook-agent
+
+services:
+  postgres:
+    container_name: chinook-postgres
+    image: pgvector/pgvector:pg17-trixie
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chinook_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mypassword}
+      POSTGRES_DB: ${POSTGRES_DB:-chinook}
+      READONLY_DB_PASSWORD: ${READONLY_DB_PASSWORD:-mydbpassword}
+      CHECKPOINT_DB_PASSWORD: ${CHECKPOINT_DB_PASSWORD:-checkpoint_secret}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-chinook_admin} -d ${POSTGRES_DB:-chinook}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  qdrant:
+    container_name: chinook-qdrant
+    image: qdrant/qdrant:v1.13.2
+    ports:
+      - "${QDRANT_PORT:-6334}:6333"
+    volumes:
+      - qdrantdata:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  pgdata:
+  qdrantdata:
