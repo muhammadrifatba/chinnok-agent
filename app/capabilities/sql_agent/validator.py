@@ -1,6 +1,8 @@
 from typing import Set
 import sqlglot
 from sqlglot import exp
+from sqlalchemy import inspect
+from app.capabilities.sql_agent.engine import get_sql_engine
 
 class SQLValidationError(Exception):
     """Raised when an SQL query fails safety or policy validation."""
@@ -28,6 +30,19 @@ ALLOWED_TABLES: Set[str] = {
     "v_employee_safe",
     "v_invoice_safe",
 }
+
+def get_allowed_tables() -> Set[str]:
+    """Dynamically returns all existing tables and views in the connected database."""
+    try:
+        inspector = inspect(get_sql_engine())
+        return {t.lower() for t in (inspector.get_table_names() + inspector.get_view_names())}
+    except Exception:
+        # Fallback if engine is offline during pure unit tests
+        return {
+            "album", "artist", "customer", "employee", "genre", "invoice",
+            "invoice_line", "media_type", "playlist", "playlist_track", "track",
+            "v_customer_safe", "v_employee_safe", "v_invoice_safe",
+        }
 
 # Strict function allowlist for analytical Text-to-SQL
 ALLOWED_FUNCTIONS: Set[str] = {
@@ -72,6 +87,16 @@ DENYLISTED_FUNCTIONS = {
     "lo_export",
 }
 
+PII_TABLES: Set[str] = {"customer", "employee", "invoice"}
+
+def _select_has_star(select: exp.Select) -> bool:
+    for e in select.expressions:
+        if isinstance(e, exp.Star):
+            return True
+        if isinstance(e, exp.Column) and isinstance(e.this, exp.Star):
+            return True
+    return False
+
 def validate_readonly_sql(query: str, dialect: str = "postgres",  allow_pii_columns: bool = False,) -> str:
     """
     Validates that the SQL query is strictly read-only, references only allowed tables,
@@ -89,7 +114,7 @@ def validate_readonly_sql(query: str, dialect: str = "postgres",  allow_pii_colu
         raise SQLValidator(f"Failed to parse SQL query: {e}") from e
 
     if len (statements) != 1:
-        raise SQLValidator(f"Only single statement queries are allowed. Found {len(statements)} statements.")
+        raise SQLValidator(f"Only single-statement queries are allowed. Found {len(statements)} statements.")
 
     tree = statements[0]
     if tree is None:
@@ -98,29 +123,44 @@ def validate_readonly_sql(query: str, dialect: str = "postgres",  allow_pii_colu
     if not isinstance(tree, ALLOWED_STATEMENT_TYPES):
         stmt_type = type(tree).__name__
         raise SQLValidator(
-            f"Disallowed query type: {stmt_type}. Only SELECT/UNION/EXCEPT/INTERSECT queries are permitted."
+            f"Forbidden SQL operation: Disallowed query type: {stmt_type}. Only SELECT/UNION/EXCEPT/INTERSECT queries are permitted."
         )
 
+    # Check forbidden statement/clause types across entire AST (including CTEs)
+    for node in tree.find_all(FORBIDDEN_AST_NODES):
+        raise SQLValidator(
+            f"Forbidden SQL operation detected: {type(node).__name__}"
+        )
+
+    # Extract CTE names so they are not rejected as unknown tables
+    cte_names = {cte.alias_or_name.lower() for cte in tree.ctes if cte.alias_or_name}
+
+    if not allow_pii_columns:
+        for select in tree.find_all(exp.Select):
+            if _select_has_star(select):
+                hit = {t.name.lower() for t in select.find_all(exp.Table)} & PII_TABLES
+                if hit:
+                    raise SQLValidator(
+                        f"SELECT * on {sorted(hit)} is forbidden (contains PII). "
+                        "Use v_customer_safe / v_employee_safe / v_invoice_safe "
+                        "or list explicit non-PII columns."
+                    )
+                
     for node in tree.walk():
         node_obj = node[0] if isinstance(node, tuple) else node
-        
-        # Check forbidden statement/clause types (writes, DDL, SELECT INTO, FOR UPDATE)
-        if isinstance(node_obj, FORBIDDEN_AST_NODES):
-            raise SQLValidator(
-                f"Forbidden SQL operation detected: {type(node_obj).__name__}"
-            )
 
         if isinstance(node_obj, exp.Table):
             table_name = (node_obj.name or "").lower()
             schema_name = (node_obj.db or "").lower()
+            if table_name in cte_names:
+                continue
             if schema_name and schema_name not in ("public", ""):
                 raise SQLValidator(
                     f"Access to schema '{schema_name}' is forbidden. Only public Chinook tables are allowed."
                 )
-            if table_name and table_name not in ALLOWED_TABLES:
-                raise SQLValidator(
-                    f"Access to table or relation '{table_name}' is forbidden."
-                )
+            allowed_tables = get_allowed_tables()
+            if table_name and table_name not in allowed_tables:
+                raise SQLValidator(f"Access to table or relation '{table_name}' is forbidden.")
          # Check function calls against allowlist
         if isinstance(node_obj, exp.Func):
             fn_name = (node_obj.name or node_obj.key or "").lower()

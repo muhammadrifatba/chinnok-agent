@@ -34,7 +34,7 @@ def get_sql_engine() -> Engine:
     return _engine
 
 
-def execute_sql(query:str, max_rows:int | None = None) -> Tuple[List[str], List[Dict[str, Any]], int, bool]:
+def execute_sql(query:str, max_rows:int | None = None, params: Dict[str, Any] | None = None) -> Tuple[List[str], List[Dict[str, Any]], int, bool]:
      """
     Executes a validated read-only SQL query and returns structured results.
     """
@@ -45,7 +45,7 @@ def execute_sql(query:str, max_rows:int | None = None) -> Tuple[List[str], List[
 
      with engine.connect() as conn:
          conn.execution_options(read_only=True)
-         result = conn.execute(text(query))
+         result = conn.execute(text(query), params or {})
          columns = list(result.keys())
 
          raw_rows = result.fetchmany(cap + 1)

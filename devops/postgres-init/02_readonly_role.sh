@@ -59,7 +59,7 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
     END
     \$\$;
 
-    GRANT CONNECT ON DATABASE \${POSTGRES_DB} TO chinook_checkpointer;
+    GRANT CONNECT ON DATABASE "${POSTGRES_DB}" TO chinook_checkpointer;
     CREATE SCHEMA IF NOT EXISTS checkpoints AUTHORIZATION chinook_checkpointer;
     GRANT ALL ON SCHEMA checkpoints TO chinook_checkpointer;
 

@@ -76,3 +76,24 @@ def validate_user_input(
         sanitized_input=cleaned,
         rejection_reason=None
     )
+
+
+def wrap_untrusted_data(
+    content: str,
+    source: str = "",
+    metadata: Optional[dict] = None
+) -> str:
+    """
+    Safely encapsulates retrieved documents or external content in an XML-like tag
+    to prevent indirect prompt injection. Neutralizes closing tag injections.
+    """
+    safe_content = content.replace("</untrusted_data>", "[ESCAPED_CLOSING_TAG]")
+    meta_parts = []
+    if source:
+        meta_parts.append(f'source="{source}"')
+    if metadata:
+        for k, v in metadata.items():
+            meta_parts.append(f'{k}="{v}"')
+    meta_str = f" {' '.join(meta_parts)}" if meta_parts else ""
+    return f"<untrusted_data{meta_str}>\n{safe_content}\n</untrusted_data>"
+
